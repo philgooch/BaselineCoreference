@@ -1,0 +1,6 @@
+<CREOLE-DIRECTORY  ID="org.philgooch.BaselineCoreference" VERSION="0.1" GATE-MIN="6.1" DESCRIPTION="Provides nominal and sortal coreference of previously annotated mentions.">
+  <CREOLE>
+      <JAR SCAN="true">BaselineCoreference.jar</JAR>
+      <JAR>lib/secondstring-20060615.jar</JAR>
+  </CREOLE>
+</CREOLE-DIRECTORY>
