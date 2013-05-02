@@ -505,8 +505,18 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                     p1String = docContent.substring(currStart.intValue(), currEnd.intValue()).trim();
                 }
 
-                Integer p1CorefId = (Integer) p1Feats.get(corefIdFeature);
-
+                Integer p1CorefId = null;
+                Object tmpP1CorefId = p1Feats.get(corefIdFeature);
+                if (tmpP1CorefId instanceof String) {
+                	p1CorefId = Integer.valueOf((String)tmpP1CorefId);
+                } else {
+                	try {
+                		p1CorefId = (Integer) tmpP1CorefId;
+                	} catch (ClassCastException ce) {
+						p1CorefId = null;
+					}
+				}
+				
                 // Get the last word of the string, we'll add this to the bpoc to see if we have a match
                 String p1LastWord = getLastWord(p1String);
 
