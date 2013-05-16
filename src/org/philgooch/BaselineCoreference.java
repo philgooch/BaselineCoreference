@@ -308,7 +308,7 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
 
             if (antecedentFeat == null && anaphorFeat == null) { // match on both null counts as a match
                 matchingValues++;
-            } else if (antecedentFeat.getClass().equals(anaphorFeat.getClass())) {
+            } else if (antecedentFeat != null && anaphorFeat != null && antecedentFeat.getClass().equals(anaphorFeat.getClass())) {
                 // check the feature values are of the same class so we can compare them
                 if (antecedentFeat instanceof String) {
                     if ( ((String)antecedentFeat).equalsIgnoreCase((String)anaphorFeat) ) {
