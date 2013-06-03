@@ -14,6 +14,8 @@ import gate.AnnotationSet;
 import gate.Document;
 import gate.Factory;
 import gate.FeatureMap;
+import gate.event.ProgressListener;
+import gate.event.StatusListener;
 
 import com.wcohen.ss.*;
 import com.wcohen.ss.api.*;
@@ -30,7 +32,7 @@ import java.net.*;
 @CreoleResource(name = "BaselineCoreference",
 helpURL = "",
 comment = "Calculates the string similarity between pairs of input annotations using a variety of available metrics.")
-public class BaselineCoreference extends AbstractLanguageAnalyser implements
+public class BaselineCoreference extends AbstractLanguageAnalyser implements ProgressListener,
         ProcessingResource,
         Serializable {
 
@@ -438,30 +440,45 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
 
         // Document content
         String docContent = document.getContent().toString();
-
+		int docLen = docContent.length();
+		
         // Create a List of Lists so that we compare input annots of the same type in separate lists
         List<List<Annotation>> inputAnnsList = new ArrayList<List<Annotation>>();
-
+		
+		// Sorted list of all sentences in document
+        List<Annotation> sentenceList = new ArrayList<Annotation>(inputAS.get(sentenceName));
+        int numSentences = sentenceList.size();
+        Collections.sort(sentenceList, new OffsetComparator());
+        
         // We allow annType of the form
         // Annotation.feature == value or just Annotation. That way, we can have Mention.type == Foo or just Foo
         for (String annType : inputASTypes) {
             AnnotationSet mentionAS = getFilteredAS(inputAS, annType);    // AS to hold the mentions we want to compare
             inputAnnsList.add(new ArrayList<Annotation>(mentionAS));
         }
-
+        
+        fireStatusChanged("Performing nominal coreference on " + document.getName());
+        fireProgressChanged(0);
+        int progress = 0;
+        
+		// Main loop
         for (List<Annotation> inputAnns : inputAnnsList) {
+        	progress++;
+        	fireProgressChanged(progress / docLen);
+        	
             Collections.sort(inputAnns, new OffsetComparator());
             // Document may not contain any of the inputAnns we are interested in
             if (inputAnns == null || inputAnns.isEmpty()) {
-                continue;
+            	continue;
             }
 
             Annotation curr = inputAnns.iterator().next();
             // Shouldn't happen but if document has been modified, it can occur
             if (curr == null) {
-                continue;
+            	continue;
             }
             boolean matchedPair = false;
+            
             // main body for upper iterator
             while (!inputAnns.isEmpty()) {
                 int currId = curr.getId();
@@ -469,17 +486,23 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                 Long currStart = curr.getStartNode().getOffset();
                 Long currEnd = curr.getEndNode().getOffset();
                 String currType = curr.getType();
-
+				
+				matchedPair = false;
+            	
                 // Progress bar
                 fireProgressChanged(100 * currId / inputAnns.size());
                 if (isInterrupted() ) {
                     throw new ExecutionException("Execution of coreference was interrupted.");
                 }
                 
-                inputAnns.remove(curr);     // remove current iteration from the list so we don't check it again
-
+                // Get sentences that cover this candidate antecedent
+                AnnotationSet currSentenceAS = inputAS.getCovering(sentenceName, currStart, currEnd);
                 // Don't process this antecedent if it occurs within a defined exclusion zone
-                if (isInExclusionRegion(inputAS, currStart, currEnd)) {
+                if (isInExclusionRegion(inputAS, currStart, currEnd) || currSentenceAS.isEmpty()) {
+                    inputAnns.remove(curr);
+                    if (inputAnns.iterator().hasNext()) {
+                        curr = inputAnns.iterator().next();
+                    }
                     continue;
                 }
 
@@ -504,7 +527,7 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                 if ( p1String.isEmpty() ) {
                     p1String = docContent.substring(currStart.intValue(), currEnd.intValue()).trim();
                 }
-
+				
                 Integer p1CorefId = null;
                 Object tmpP1CorefId = p1Feats.get(corefIdFeature);
                 if (tmpP1CorefId instanceof String) {
@@ -520,16 +543,38 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                 // Get the last word of the string, we'll add this to the bpoc to see if we have a match
                 String p1LastWord = getLastWord(p1String);
 
+				// Need to get all inputAnns that are within maxNominalSentenceDistance from antecedent
+                Annotation currSentence = currSentenceAS.iterator().next();
+                int currSentencePos = sentenceList.indexOf(currSentence);
+                int endSentencePos = currSentencePos + maxNominalSentenceDistance;
+                if (currSentencePos >= numSentences - 1) {
+                    endSentencePos = currSentencePos;
+                } else if (endSentencePos >= numSentences - 1) {
+                    endSentencePos = numSentences - 1;
+                }
+                Annotation endSentence = sentenceList.get(endSentencePos);
+                
+                Long currSentenceStart = currSentence.getStartNode().getOffset();
+                Long currSentenceEnd = currSentence.getEndNode().getOffset();
+                Long endSentenceStart = endSentence.getStartNode().getOffset();
+                Long endSentenceEnd = endSentence.getEndNode().getOffset();
+                
+                AnnotationSet anaphorAS = inputAS.get(currType, currEnd, endSentenceEnd);
+                // AnnotationSet anaphorAS = new gate.annotation.AnnotationSetImpl(document, "temp"); 
+                // anaphorAS.addAll(inputAnns);
+                // List<Annotation> anaphorList = new ArrayList<Annotation>(anaphorAS.getContained(currEnd, endSentenceEnd));
+                List<Annotation> anaphorList = new ArrayList<Annotation>(anaphorAS);
+                Collections.sort(anaphorList, new OffsetComparator());
+        
+        		inputAnns.remove(curr);     // remove current iteration from the list so we don't check it again
+
                 // main body for lower iterator
-                for (Iterator<Annotation> itr = inputAnns.iterator(); itr.hasNext();) {
+                for (Iterator<Annotation> itr = anaphorList.iterator(); itr.hasNext();) {
+                	if (isInterrupted() ) {
+                    	throw new ExecutionException("Execution of coreference was interrupted.");
+                	}
                     Annotation ann = itr.next();
-                    if (matchedPair) {
-                        for (int i = 0; i < currIndex; i++) {
-                            if (itr.hasNext()) {
-                                ann = itr.next();
-                            }
-                        }
-                    }
+                    
                     matchedPair = false;
                     Long annStart = ann.getStartNode().getOffset();
                     Long annEnd = ann.getEndNode().getOffset();
@@ -537,7 +582,7 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                     // Sanity check - don't look backwards! Shouldn't happen but the algorithm isn't perfect
                     // when the last match was the final node
                     if (annStart <= currStart || annEnd <= currEnd ) {
-                        continue;
+                    	continue;
                     }
                     
                     boolean isDefiniteDescriptor = isDefiniteDescriptor(inputAS, annStart, annEnd);
@@ -549,7 +594,7 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                        (maxNominalSentenceDistance > -1 && maxNominalSentenceDistance < sentenceDistance) ||
                        (isDefiniteDescriptor && maxSortalSentenceDistance > -1 && maxSortalSentenceDistance < sentenceDistance)
                        ) {
-                        continue;
+                       	continue;
                     }
 
                     FeatureMap p2Feats = ann.getFeatures();
@@ -571,7 +616,9 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                     if ( p2String.isEmpty() ) {
                         p2String = docContent.substring(annStart.intValue(), annEnd.intValue()).trim();
                     }
-
+					
+					// System.out.print(" against " + ann.getId() + ": " + p2String + "\n");
+					
                     Integer p2BackRefId = (Integer) p2Feats.get(backrefIdFeature);		// get link back to existing coreferring Mention - if it's there, we don't want to link again
 
                     // Get the last word of the string, we'll add this to the bpoc to see if we have a match
@@ -615,7 +662,7 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                                         matchedPair = true;
                                         compareScore = 0.75;
                                     } else {    // we've got feature matches but nothing else, but as this is a sortal reference and close to the antecedent, raise a tentative match
-                                        if (numComparisonFeatures > 0 || nummatchingFeats > 0) {
+                                        if (!currType.equalsIgnoreCase("Person") && (numComparisonFeatures > 0 || nummatchingFeats > 0)) {
                                             matchedPair = true;
                                             compareScore = 0.5;
                                         }
@@ -631,13 +678,11 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                                     compareScore = 0.65;
                                 }
                             }
-                            // Headword only match - can be risky
-                            /*
-                            if (!matchedPair && p1LastWord.equalsIgnoreCase(p2LastWord)) {
+                            // Headword only match - can be risky, but useful for Person matches, e.g. John Smith vs Mr Smith
+                            if (!matchedPair && !isDefiniteDescriptor && getNumWords(p1String) > 1 && p1LastWord.equalsIgnoreCase(p2LastWord) && currType.equalsIgnoreCase("Person")) {
                                 matchedPair = true;
-                                compareScore = 0.5;
+                                compareScore = 0.70;
                             }
-                            */
                             // Approximate string match
                             if (!matchedPair && p1String.length() >= shortestWord && p2String.length() >= shortestWord) {
                                 // Calculate string similarity if string lengths are longer than shortestWord
@@ -667,7 +712,7 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
 
 
                     if (matchedPair) {
-                        // mark the coref
+                    	// mark the coref
                         p1Feats.put("score", compareScore);
                         p1Feats.put(corefIdFeature, ann.getId());
                         p1Feats.put(corefTextFeature, p2String);		// coreferent text
@@ -684,11 +729,13 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
                                 }
                             }
                         }
-                        // itr.remove();
                         curr = ann;
+                        itr.remove();
                         break;
                     } // end if matchedPair
                 } // end for loop over lower iterator
+                
+                
                 if (inputAnns.iterator().hasNext()) {
                     Annotation next = inputAnns.iterator().next();
                     if (!matchedPair) {
@@ -702,6 +749,18 @@ public class BaselineCoreference extends AbstractLanguageAnalyser implements
         fireProcessFinished();
     } // end execute()
 
+
+    
+    @Override
+    public void progressChanged(int i) {
+        fireProgressChanged(i);
+    }
+
+    @Override
+    public void processFinished() {
+        fireProcessFinished();
+    }
+    
     
     @Optional
     @RunTime
